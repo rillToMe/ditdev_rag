@@ -5,7 +5,7 @@
 **Offline RAG (Retrieval-Augmented Generation) service for CHANGLI-AI**  
 *The knowledge backbone of [ditdev.kyuzenstudio.com](https://ditdev.kyuzenstudio.com)*
 
-[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-0.5-orange?style=flat)](https://trychroma.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -87,7 +87,7 @@ Portfolio data is split into semantic chunks across categories:
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.11+
 - PostgreSQL database (for dynamic data)
 
 ### Installation
