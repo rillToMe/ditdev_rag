@@ -1,0 +1,119 @@
+{
+  "skills": [
+    {
+      "id": "skill_unity",
+      "category": "Game Dev",
+      "name": "Unity",
+      "level": "Advanced",
+      "description": "Adit-san uses Unity as primary game engine. Experienced in 2D and 3D game development, physics, animation, and C# scripting."
+    },
+    {
+      "id": "skill_godot",
+      "category": "Game Dev",
+      "name": "Godot",
+      "level": "Intermediate",
+      "description": "Adit-san builds games with Godot engine, using GDScript and scene-based architecture for indie game projects."
+    },
+    {
+      "id": "skill_unreal",
+      "category": "Game Dev",
+      "name": "Unreal Engine",
+      "level": "Apprentice",
+      "description": "Adit-san is learning Unreal Engine for AAA-style game development and visual scripting with Blueprints."
+    },
+    {
+      "id": "skill_csharp",
+      "category": "Language",
+      "name": "C#",
+      "level": "Advanced",
+      "description": "Adit-san's primary programming language for game development, used extensively with Unity for game logic and systems."
+    },
+    {
+      "id": "skill_javascript",
+      "category": "Language",
+      "name": "JavaScript",
+      "level": "Intermediate",
+      "description": "Adit-san uses JavaScript for frontend and backend web development including React components and Node.js APIs."
+    },
+    {
+      "id": "skill_react",
+      "category": "Web",
+      "name": "React",
+      "level": "Intermediate",
+      "description": "Adit-san builds interactive web UIs with React, using hooks, Vite, Tailwind CSS, and Framer Motion for animations."
+    },
+    {
+      "id": "skill_nodejs",
+      "category": "Web",
+      "name": "Node.js",
+      "level": "Intermediate",
+      "description": "Adit-san uses Node.js with Express to build REST APIs, including this very portfolio backend."
+    },
+    {
+      "id": "skill_tailwind",
+      "category": "Web",
+      "name": "Tailwind CSS",
+      "level": "Intermediate",
+      "description": "Adit-san uses Tailwind CSS for rapid UI styling with utility classes, used in this pixel-art portfolio."
+    },
+    {
+      "id": "skill_blender",
+      "category": "Tools",
+      "name": "Blender",
+      "level": "Apprentice",
+      "description": "Adit-san uses Blender for 3D modeling and asset creation for game development projects."
+    },
+    {
+      "id": "skill_postgresql",
+      "category": "Database",
+      "name": "PostgreSQL",
+      "level": "Intermediate",
+      "description": "Adit-san uses PostgreSQL (via Neon) as database for this portfolio backend, managing projects, certificates, and stats."
+    },
+    {
+      "id": "skill_github",
+      "category": "Tools",
+      "name": "GitHub",
+      "level": "Intermediate",
+      "description": "Adit-san uses GitHub for version control and open source contributions. Profile: https://github.com/rillToMe"
+    }
+  ],
+  "about": {
+    "name": "Rahmat Aditya",
+    "alias": "Adit-san",
+    "role": "Game Developer & Web Enthusiast",
+    "location": "Sumatera Barat, Indonesia",
+    "experience": "2+ years of coding experience",
+    "github": "https://github.com/rillToMe",
+    "tiktok": "https://www.tiktok.com/@goodvibes_music28",
+    "instagram": "https://www.instagram.com/rill_lyrics/",
+    "available_for": "Freelance and collaborations",
+    "description": "Adit-san is a passionate Game Developer and Web Enthusiast from Sumatera Barat, Indonesia. He builds games with Unity and Godot, and web experiences with React and Node.js. Always leveling up, always learning."
+  },
+  "education": [
+    {
+      "id": "edu_smk",
+      "level": "SMK / Vocational School",
+      "institution": "SMK NEGERI 4 PAYAKUMBUH",
+      "location": "Payakumbuh, Sumatera Barat",
+      "period": "2024 - Present",
+      "status": "ongoing",
+      "focus": "Software Engineering, Game Development, Web Development"
+    },
+    {
+      "id": "edu_mts",
+      "level": "MTsN",
+      "institution": "MTs Negeri 3 Kab. Lima Puluh Kota",
+      "location": "Guguak, Kabupaten Lima Puluh Kota, Sumatera Barat",
+      "period": "2021 - 2024",
+      "status": "completed",
+      "focus": "Started self-learning programming and HTML during this period"
+    }
+  ],
+  "contact": {
+    "description": "Adit-san is open for freelance projects, game development collaborations, and web development work.",
+    "method": "Travelers can reach Adit-san through the Contact section of the portfolio.",
+    "response_time": "Usually responds within 1-2 days",
+    "open_for": ["Freelance game development", "Web development projects", "Collaborations", "Indie game projects"]
+  }
+}

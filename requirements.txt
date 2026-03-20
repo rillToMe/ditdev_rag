@@ -1,0 +1,7 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+sentence-transformers==3.1.1
+chromadb==0.5.15
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+requests==2.32.3
