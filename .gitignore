@@ -40,3 +40,6 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
+test_model.py
+
+implementation_plan.md

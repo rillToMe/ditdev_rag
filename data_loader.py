@@ -6,13 +6,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def load_static_data() -> list[dict]:
+    """Load skills, about, education, contact from JSON - return list of chunks."""
     base_dir = os.path.dirname(__file__)
     with open(os.path.join(base_dir, 'skills_data.json'), 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     chunks = []
 
-    # Skills 
+    # Skills
     for skill in data.get('skills', []):
         chunks.append({
             'id'      : skill['id'],
@@ -29,7 +30,7 @@ def load_static_data() -> list[dict]:
             }
         })
 
-    #About 
+    # About
     about = data.get('about', {})
     chunks.append({
         'id'  : 'about_adit',
@@ -38,14 +39,15 @@ def load_static_data() -> list[dict]:
             f"About Adit-san: {about.get('description', '')} "
             f"Location: {about.get('location')}. "
             f"Role: {about.get('role')}. "
-            f"Experience: {about.get('experience')}. "
             f"Available for: {about.get('available_for')}. "
-            f"GitHub: {about.get('github')}."
+            f"GitHub: {about.get('github')}. "
+            f"TikTok: {about.get('tiktok')}. "
+            f"Instagram: {about.get('instagram')}."
         ),
         'metadata': {'type': 'about', 'name': about.get('name', '')}
     })
 
-    #Education 
+    # Education
     for edu in data.get('education', []):
         chunks.append({
             'id'  : edu['id'],
@@ -62,7 +64,7 @@ def load_static_data() -> list[dict]:
             }
         })
 
-    #Contact 
+    # Contact
     contact = data.get('contact', {})
     chunks.append({
         'id'  : 'contact_info',
@@ -78,9 +80,8 @@ def load_static_data() -> list[dict]:
 
     return chunks
 
-
+#dynamic data
 def load_dynamic_data() -> list[dict]:
-    """Load projects dan certificates dari PostgreSQL — return list of chunks."""
     chunks = []
     conn   = None
 
@@ -88,7 +89,46 @@ def load_dynamic_data() -> list[dict]:
         conn = psycopg2.connect(os.getenv('DATABASE_URL'))
         cur  = conn.cursor()
 
-        # Projects 
+        # Stats real-time
+        cur.execute("SELECT COUNT(*) FROM projects")
+        total_projects = int(cur.fetchone()[0])
+
+        cur.execute("SELECT COUNT(*) FROM certificates")
+        total_certs = int(cur.fetchone()[0])
+
+        months_studying = None
+        cur.execute("SELECT start_date FROM stats WHERE key = 'months_studying'")
+        row = cur.fetchone()
+        if row and row[0]:
+            from datetime import date
+            today = date.today()
+            sd = row[0]
+            months_studying = (today.year - sd.year) * 12 + (today.month - sd.month) + 1
+
+        months_text = (
+            f"Adit-san has been coding for exactly {months_studying} months "
+            f"(officially started August 28, 2024). "
+            f"Do NOT say 2 years, 3 years, or 4 years - the correct answer is {months_studying} months."
+        ) if months_studying else ""
+
+        chunks.append({
+            'id'  : 'stats_summary',
+            'type': 'stats',
+            'text': (
+                f"AUTHORITATIVE REAL-TIME STATS - always use this data: "
+                f"Adit-san has built {total_projects} projects in total. "
+                f"Adit-san has earned {total_certs} certificates. "
+                f"{months_text}"
+            ),
+            'metadata': {
+                'type'           : 'stats',
+                'total_projects' : str(total_projects),
+                'total_certs'    : str(total_certs),
+                'months_studying': str(months_studying) if months_studying else '',
+            }
+        })
+
+        # Projects
         cur.execute("""
             SELECT p.id, p.title, p.description, p.tags,
                    json_agg(json_build_object('type', pl.type, 'url', pl.url))
@@ -126,7 +166,7 @@ def load_dynamic_data() -> list[dict]:
                 }
             })
 
-        # Certificates
+        # Certificates 
         cur.execute("""
             SELECT id, title, provider, issue_date, credential_url
             FROM certificates

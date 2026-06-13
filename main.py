@@ -81,7 +81,6 @@ def index_update(req: IndexAddRequest):
 #delete chunk
 @app.post('/index/delete')
 def index_delete(req: IndexDeleteRequest):
-    """Hapus chunk — dipanggil saat DELETE project/cert."""
     r = get_rag()
     ok = r.delete_chunk(req.chunk_id)
     if not ok:
@@ -91,12 +90,24 @@ def index_delete(req: IndexDeleteRequest):
 #rebuild chunk
 @app.post('/rebuild')
 def rebuild(req: RebuildRequest):
-    """Full rebuild — fallback only, protected by secret."""
     if req.secret != os.getenv('RAG_REBUILD_SECRET', 'changli_rebuild'):
         raise HTTPException(status_code=401, detail='Invalid secret')
     r = get_rag()
     r.rebuild_index()
     return {'status': 'rebuilt', 'chunks': r.collection.count()}
+
+# Cache stats
+@app.get('/cache/stats')
+def cache_stats():
+    r = get_rag()
+    return r.cache_stats()
+
+# Cache clear
+@app.post('/cache/clear')
+def cache_clear():
+    r = get_rag()
+    r.cache.invalidate()
+    return {'status': 'cleared'}
 
 
 if __name__ == '__main__':

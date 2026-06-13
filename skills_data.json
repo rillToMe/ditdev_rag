@@ -83,7 +83,6 @@
     "alias": "Adit-san",
     "role": "Game Developer & Web Enthusiast",
     "location": "Sumatera Barat, Indonesia",
-    "experience": "2+ years of coding experience",
     "github": "https://github.com/rillToMe",
     "tiktok": "https://www.tiktok.com/@goodvibes_music28",
     "instagram": "https://www.instagram.com/rill_lyrics/",
@@ -107,13 +106,18 @@
       "location": "Guguak, Kabupaten Lima Puluh Kota, Sumatera Barat",
       "period": "2021 - 2024",
       "status": "completed",
-      "focus": "Started self-learning programming and HTML during this period"
+      "focus": "Began exploring programming during this period (2021-2024), without a specific starting year."
     }
   ],
   "contact": {
     "description": "Adit-san is open for freelance projects, game development collaborations, and web development work.",
     "method": "Travelers can reach Adit-san through the Contact section of the portfolio.",
     "response_time": "Usually responds within 1-2 days",
-    "open_for": ["Freelance game development", "Web development projects", "Collaborations", "Indie game projects"]
+    "open_for": [
+      "Freelance game development",
+      "Web development projects",
+      "Collaborations",
+      "Indie game projects"
+    ]
   }
 }
