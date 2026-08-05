@@ -167,4 +167,13 @@ if __name__ == '__main__':
         )
     # Keep this single-process: the index is built at startup and the query cache
     # lives in memory, so extra workers mean N model copies and N caches.
-    uvicorn.run('main:app', host=HOST, port=PORT, reload=False, workers=1)
+    
+    uvicorn.run(
+    "main:app",
+    host=HOST,
+    port=PORT,
+    reload=False,
+    workers=1,
+    loop="uvloop",
+    http="httptools",
+    )
