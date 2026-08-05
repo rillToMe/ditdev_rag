@@ -127,7 +127,7 @@ class LRUCache:
 class RAGEngine:
     def __init__(self):
         log.info('Loading embedding model: %s', EMBED_MODEL)
-        self.embedder = SentenceTransformer(EMBED_MODEL, device='cpu', local_files_only=True)
+        self.embedder = SentenceTransformer(EMBED_MODEL, device='cpu', local_files_only=False)
 
         log.info('Opening ChromaDB at %s', CHROMA_PATH)
         self.client     = chromadb.PersistentClient(
