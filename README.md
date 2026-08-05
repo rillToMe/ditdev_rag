@@ -2,12 +2,13 @@
 
 # 🧠 ditdev-rag
 
-**Offline RAG (Retrieval-Augmented Generation) service for CHANGLI-AI**  
+**RAG (Retrieval-Augmented Generation) service for CHANGLI-AI**  
 *The knowledge backbone of [ditdev.kyuzenstudio.com](https://ditdev.kyuzenstudio.com)*
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-0.5-orange?style=flat)](https://trychroma.com)
+[![Workers AI](https://img.shields.io/badge/Workers%20AI-bge--m3-F38020?style=flat&logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers-ai/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -16,7 +17,7 @@
 
 ## 🌟 What is this?
 
-**ditdev-rag** is a lightweight, fully offline RAG service that powers CHANGLI-AI - the shrine maiden AI guide of Rahmat Aditya's pixel art portfolio.
+**ditdev-rag** is a lightweight RAG service that powers CHANGLI-AI - the shrine maiden AI guide of Rahmat Aditya's pixel art portfolio.
 
 Instead of stuffing all portfolio data into the LLM system prompt (expensive & slow), this service:
 1. **Embeds** structured portfolio data into a local vector database
@@ -25,6 +26,9 @@ Instead of stuffing all portfolio data into the LLM system prompt (expensive & s
 
 This keeps token usage minimal while keeping CHANGLI-AI's answers accurate and grounded in real data.
 
+Embeddings come from **Cloudflare Workers AI** (`@cf/baai/bge-m3`). The vector store
+is still local: only the embedding call leaves the machine.
+
 ---
 
 ## ✨ Features
@@ -32,9 +36,10 @@ This keeps token usage minimal while keeping CHANGLI-AI's answers accurate and g
 - 🔍 **Semantic search** - finds relevant data by meaning, not just keywords
 - ⚡ **Incremental indexing** - add, update, delete single chunks without full rebuild
 - 🗄️ **Persistent vector store** - ChromaDB stores embeddings locally on disk
+- 🪶 **No local model** - no torch, no 470 MB of weights, no cold start; embeddings are one HTTPS call
 - 🛡️ **Graceful fallback** - if RAG is down, the LLM still responds from its base persona
 - 🔄 **Real-time sync** - portfolio data stays in sync with PostgreSQL via backend index hooks
-- 🧹 **Self-healing index** - startup compares the index against Postgres and rebuilds on drift, so a hook lost while this service was down repairs itself
+- 🧹 **Self-healing index** - startup compares the index against Postgres and rebuilds on drift (or on an embedding dimension change), so a hook lost while this service was down repairs itself
 - 🚫 **Off-topic filtering** - a cosine distance cutoff means `found: false` is a real answer, not a formality
 
 ---
@@ -66,13 +71,17 @@ Rust Backend (axum)
                                          │
                               ┌──────────┴──────────┐
                               │                     │
-                       sentence-transformers     ChromaDB
-                    (multilingual-e5-small)    (persistent)
-                       embedding model          vector store
+                      Cloudflare Workers AI      ChromaDB
+                        (@cf/baai/bge-m3)       (persistent)
+                        embeddings, 1024-d      vector store
 ```
 
 The backend never formats chunk text for whole-DB summaries; it just asks for a
 refresh. That template lives here only, so the two sides cannot drift.
+
+`embeddings.py` is the only module that knows how a vector is produced. Swapping
+providers means adding one `EmbeddingProvider` subclass and injecting it into
+`RAGEngine(embedder=...)` - retrieval, scoring and the store stay untouched.
 
 ---
 
@@ -107,6 +116,7 @@ number is authoritative.
 ### Prerequisites
 - Python 3.11+
 - PostgreSQL database (for dynamic data)
+- A Cloudflare account with Workers AI, and an API token with **Workers AI: Read**
 
 ### Installation
 
@@ -121,12 +131,11 @@ source rag-env/bin/activate  # Windows: rag-env\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Pre-download the embedding model into the HF cache. The engine loads with
-# local_files_only=True, so without this step startup fails instead of
-# silently reaching out to huggingface.co at runtime.
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-small')"
 ```
+
+No model download step: embeddings are an HTTPS call to Workers AI. If you are
+upgrading from the local-model version, `pip uninstall sentence-transformers torch`
+reclaims a couple of GB.
 
 ### Configuration
 
@@ -137,6 +146,8 @@ cp env.example .env
 Edit `.env`:
 ```env
 DATABASE_URL=postgresql://user:password@host/dbname
+CLOUDFLARE_ACCOUNT_ID=your_account_id
+CLOUDFLARE_API_TOKEN=your_workers_ai_token
 RAG_PORT=8765
 # Generate one. /rebuild stays disabled while this is empty.
 RAG_REBUILD_SECRET=your_secret_here
@@ -144,12 +155,14 @@ RAG_REBUILD_SECRET=your_secret_here
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `CLOUDFLARE_ACCOUNT_ID` | *(required)* | Workers AI account. Startup fails without it |
+| `CLOUDFLARE_API_TOKEN` | *(required)* | Token with `Workers AI: Read`. Never logged |
+| `CLOUDFLARE_EMBEDDING_MODEL` | `@cf/baai/bge-m3` | Embedding model; swap without code changes |
 | `RAG_HOST` | `127.0.0.1` | Bind address. Anything non-local requires `RAG_API_SECRET` |
 | `RAG_PORT` | `8765` | Listen port |
 | `RAG_API_SECRET` | *(empty)* | Required on every mutating route once set; sent by the backend as `X-RAG-Secret` |
 | `RAG_REBUILD_SECRET` | *(empty)* | `/rebuild` is disabled while unset - no fallback default |
-| `RAG_DISTANCE_THRESHOLD` | `0.21` | Cosine cutoff for "relevant". Re-measure after changing the model |
-| `RAG_EMBED_MODEL` | `intfloat/multilingual-e5-small` | Embedding model |
+| `RAG_DISTANCE_THRESHOLD` | `0.21` | Cosine cutoff for "relevant". **Model-specific** - re-measure after changing the model |
 | `RAG_LOG_LEVEL` | `INFO` | Log verbosity |
 
 ### Run
@@ -162,17 +175,18 @@ Run it this way rather than through `uvicorn` directly: `__main__` refuses a
 non-local bind without `RAG_API_SECRET`, because `/index/*` text lands verbatim in
 a public chatbot's system prompt.
 
-Single process only. The model and the query cache live in memory, so extra
-workers mean N model copies and N caches that never agree.
+Single process only. The query cache lives in memory, so extra workers mean N
+caches that never agree.
 
 On first run, the service will automatically:
 1. Load all chunks from `skills_data.json` and PostgreSQL
-2. Generate embeddings using `multilingual-e5-small`
+2. Embed them through Workers AI in one batched request
 3. Store vectors in `chroma_store/` (created automatically)
 
-On every later start it compares the index count against Postgres and rebuilds on
-drift - unless the DB is unreachable, in which case it keeps the existing index
-rather than replacing it with a static-only one.
+On every later start it compares the index against Postgres and rebuilds on drift -
+in chunk count, or in embedding dimension after a model swap - unless the DB is
+unreachable, in which case it keeps the existing index rather than replacing it
+with a static-only one.
 
 ### Test
 
@@ -180,12 +194,14 @@ rather than replacing it with a static-only one.
 python test_retrieve.py
 ```
 
-Pure-logic checks always run. The integration section self-skips when the model or
-index is missing, and prints the min-distance spread per query so
+Pure-logic checks always run and need no credentials: the embedding provider is
+exercised against a mocked transport (batching, retries, malformed responses).
+The integration section self-skips when credentials or the index are missing, and
+prints the min-distance spread per query so
 `RAG_DISTANCE_THRESHOLD` can be tuned by eye: on-topic queries should sit well
-below it, off-topic ones above. Measured on the current corpus, on-topic queries
-land at 0.10-0.19 and off-topic ones at 0.23-0.25 - a ~0.02 margin, so re-run this
-after adding chunk types.
+below it, off-topic ones above. The 0.10-0.19 on-topic / 0.23-0.25 off-topic figures
+behind the current default were measured on the **old local model**, so re-run this
+with credentials set and re-tune before trusting `found: false` from bge-m3.
 
 ---
 
@@ -194,9 +210,13 @@ after adding chunk types.
 Every mutating route (`/index/*`, `/rebuild`, `/cache/clear`) requires the
 `X-RAG-Secret` header once `RAG_API_SECRET` is set.
 
+Any route that has to embed returns **503** if Workers AI is unreachable after
+retries - never a wrong answer built from a failed embedding.
+
 ### `GET /health`
-Service status, chunk census and last known DB state. `degraded` means the index is
-empty, Postgres was unreachable, or the authoritative `stats` chunk is missing.
+Service status, chunk census, last known DB state and the model that built the index.
+`degraded` means the index is empty, Postgres was unreachable, or the authoritative
+`stats` chunk is missing.
 
 ```json
 {
@@ -204,6 +224,7 @@ empty, Postgres was unreachable, or the authoritative `stats` chunk is missing.
   "chunks": 31,
   "by_type": { "skill": 12, "project": 8, "certificate": 4, "stats": 1 },
   "db_ok": true,
+  "embed_model": "@cf/baai/bge-m3",
   "cache": { "size": 3, "maxsize": 128, "ttl": 300 }
 }
 ```
@@ -292,6 +313,7 @@ safe - a chunk missed while this service was down is repaired on its next boot.
 ditdev-rag/
 ├── main.py            # FastAPI app & endpoints
 ├── rag_engine.py      # Core RAG logic (embed, score, retrieve, index writes)
+├── embeddings.py      # EmbeddingProvider + Cloudflare Workers AI implementation
 ├── data_loader.py     # Static + dynamic chunk loading; owns all chunk templates
 ├── test_retrieve.py   # Logic checks + distance probe
 ├── skills_data.json   # Static portfolio data (skills, education, contact)
@@ -302,20 +324,48 @@ ditdev-rag/
 
 ---
 
+## 🔁 Migrating from the local model
+
+If you are updating an existing deployment that ran `multilingual-e5-small` locally:
+
+1. **Set the new env vars.** `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`
+   (token needs `Workers AI: Read`). Startup fails fast without them instead of
+   erroring on the first user query. `RAG_EMBED_MODEL` is gone - use
+   `CLOUDFLARE_EMBEDDING_MODEL`.
+2. **Let the first boot rebuild the index.** The old store holds 384-d vectors and
+   bge-m3 emits 1024-d; Chroma rejects a mismatched query. Startup probes the live
+   dimension, sees the drift and rebuilds automatically - no manual `rm -rf
+   chroma_store/`. Requires Postgres to be reachable, or it keeps the old index and
+   reports `degraded`.
+3. **Re-tune `RAG_DISTANCE_THRESHOLD`.** The `0.21` default was measured on e5-small.
+   Run `python test_retrieve.py` with credentials set and read the printed
+   min-distance table: pick a cutoff above every on-topic query and below every
+   off-topic one. Until you do, `found: false` is not trustworthy.
+4. **Optional cleanup.** `pip uninstall sentence-transformers torch` reclaims a
+   couple of GB. `onnxruntime` may stay as a ChromaDB transitive dependency; it is
+   never invoked, since every embedding is passed in explicitly.
+
+Nothing else changed: chunk templates, scoring, retrieval, the store and every API
+route are the same. `embeddings.py` is the only module that knows how a vector is
+made.
+
+---
+
 ## 🛠️ Tech Stack
 
 | Component | Technology |
 |-----------|-----------|
 | API Framework | FastAPI |
-| Embedding Model | `intfloat/multilingual-e5-small` (sentence-transformers, CPU, offline) |
+| Embedding Model | `@cf/baai/bge-m3` via Cloudflare Workers AI (1024-d) |
+| HTTP Client | httpx (one pooled `Client`, retries with backoff) |
 | Vector Database | ChromaDB (persistent, local, cosine space) |
 | LLM | Cerebras API - `gpt-oss-120b` |
 | Database | Neon PostgreSQL |
 
 The model is multilingual because the queries are: CHANGLI-AI is asked things like
-"berapa total project adit" far more often than the English equivalent. Passages are
-embedded with the `passage:` prefix and queries with `query:` - e5 is trained that
-way and drops noticeable accuracy without it.
+"berapa total project adit" far more often than the English equivalent. bge-m3 is
+prefix-free - the `query:`/`passage:` prefixes the previous e5 model required are
+gone, and prepending them now would only add noise.
 
 ---
 

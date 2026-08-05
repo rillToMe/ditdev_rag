@@ -1,13 +1,93 @@
-"""Runnable checks for the retrieval logic: `python test_retrieve.py`.
+import json
 
-Part 1 is pure logic and always runs (no model, no DB, no index).
-Part 2 hits the real index and is skipped when the model or store is missing.
-"""
+import httpx
 
 from data_loader import months_since
+from embeddings import CloudflareEmbeddingProvider, EmbeddingError
 from rag_engine import DISTANCE_THRESHOLD, LRUCache, RAGEngine
 
 E = RAGEngine  # static methods only, no instance needed
+
+
+# Embedding provider (mocked transport - no network, no credentials)
+
+def _provider(handler, **kwargs) -> CloudflareEmbeddingProvider:
+    return CloudflareEmbeddingProvider(
+        'acct', 'secret-token',
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff=0, **kwargs,
+    )
+
+
+def _ok(count: int, dim: int = 3) -> httpx.Response:
+    return httpx.Response(200, json={
+        'success': True,
+        'result' : {'shape': [count, dim], 'data': [[0.1] * dim for _ in range(count)]},
+    })
+
+
+def test_embed_batches_instead_of_one_call_per_text():
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers['authorization'] == 'Bearer secret-token'
+        texts = json.loads(request.content)['text']
+        sent.append(texts)
+        return _ok(len(texts))
+
+    provider = _provider(handler, batch_size=2)
+    assert len(provider.embed_batch(['a', 'b', 'c'])) == 3
+    assert sent == [['a', 'b'], ['c']], 'must batch, not one request per text'
+    assert provider.embed('solo') == [0.1, 0.1, 0.1]
+    assert provider.embed_batch([]) == []
+
+
+def test_retries_5xx_then_succeeds():
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return _ok(1) if len(attempts) > 2 else httpx.Response(503)
+
+    assert _provider(handler, max_retries=3).embed('x') == [0.1, 0.1, 0.1]
+    assert len(attempts) == 3
+
+
+def test_client_errors_are_not_retried():
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(401, json={'errors': [{'code': 10000, 'message': 'bad token'}]})
+
+    try:
+        _provider(handler, max_retries=3).embed('x')
+        raise AssertionError('a 401 must raise')
+    except EmbeddingError as e:
+        assert 'bad token' in str(e) and 'secret-token' not in str(e)
+    assert len(attempts) == 1, 'retrying a bad token just burns the rate limit'
+
+
+def test_bad_bodies_raise_instead_of_returning_junk():
+    cases = (
+        httpx.Response(200, text='<html>gateway</html>'),   # invalid JSON
+        httpx.Response(200, json={'success': False, 'errors': [{'message': 'model down'}]}),
+        httpx.Response(200, json={'result': {'data': []}}),  # fewer vectors than asked for
+        httpx.Response(200, json={'result': {'data': [[]]}}),  # empty vector
+    )
+    for response in cases:
+        provider = _provider(lambda request, r=response: r, max_retries=0)
+        try:
+            provider.embed('x')
+            raise AssertionError(f'expected a raise for {response.text[:40]!r}')
+        except EmbeddingError:
+            pass
+
+    try:
+        _provider(lambda request: _ok(1), max_retries=0).embed_batch(['ok', '  '])
+        raise AssertionError('blank text must raise')
+    except EmbeddingError:
+        pass
 
 
 def test_normalize():
@@ -110,13 +190,11 @@ def first_type(context: str) -> str | None:
 
 
 def probe_distances(engine: RAGEngine):
-    """Prints the distance spread so DISTANCE_THRESHOLD can be tuned by eye:
-    on-topic queries should sit well below it, off-topic ones above."""
-    print(f'  DISTANCE_THRESHOLD = {DISTANCE_THRESHOLD}')
+    print(f'  DISTANCE_THRESHOLD = {DISTANCE_THRESHOLD}  (model: {engine.embedder.model})')
     for query in [q for q, _ in GOLDEN] + list(ON_TOPIC) + list(OFF_TOPIC):
         normalized = engine._normalize(query)
         expanded   = engine._expand(normalized, engine._intents(normalized))
-        embedding  = engine.embedder.encode([f'query: {expanded}']).tolist()[0]
+        embedding  = engine.embedder.embed(expanded)
         res = engine.collection.query(
             query_embeddings=[embedding], n_results=3, include=['distances'],
         )
@@ -127,7 +205,7 @@ def integration() -> int:
     try:
         engine = RAGEngine()
     except Exception as e:
-        print(f'  SKIP - no model or index available ({type(e).__name__}: {e})')
+        print(f'  SKIP - no credentials, index or DB available ({type(e).__name__}: {e})')
         return 0
 
     report = engine.health()

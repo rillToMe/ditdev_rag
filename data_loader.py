@@ -1,11 +1,3 @@
-"""Build portfolio chunks from skills_data.json (static) + PostgreSQL (dynamic).
-
-This module owns every chunk text template. The backend used to format
-`stats_summary` itself, which silently dropped the anti-hallucination guard the
-Python side had added - so the service now exposes /index/refresh-derived and
-the backend just asks for a refresh.
-"""
-
 import json
 import logging
 import os
@@ -24,8 +16,7 @@ BASE_DIR = os.path.dirname(__file__)
 
 class DBUnavailable(RuntimeError):
     """Postgres could not be reached, so dynamic chunks are missing."""
-
-
+    
 @contextmanager
 def _cursor():
     try:
@@ -42,7 +33,6 @@ def _cursor():
 
 
 def months_since(start_iso: str) -> int | None:
-    """Whole months between start_iso (YYYY-MM-DD) and today, counting both ends."""
     try:
         year, month = int(start_iso[:4]), int(start_iso[5:7])
     except (TypeError, ValueError, IndexError):
@@ -72,12 +62,6 @@ def _skill_chunk(skill: dict) -> dict:
 
 
 def _skills_summary_chunk(skills: list[dict]) -> dict:
-    """One chunk holding every skill.
-
-    Retrieval returns at most top_k chunks, so "skill apa aja yang dikuasai?"
-    could only ever surface 4 of the 11 skill chunks. This chunk answers the
-    enumeration in a single hit.
-    """
     listed = '; '.join(f"{s['name']} ({s['category']}, {s['level']})" for s in skills)
     return {
         'id'  : 'skills_summary',
@@ -152,12 +136,6 @@ def load_static_data() -> list[dict]:
 # Dynamic chunks (PostgreSQL)
 
 def _stats_chunk(total_projects: int, total_certs: int, coding_start: str) -> dict:
-    """Counts only.
-
-    The month count is deliberately NOT baked into the text: it used to be, and
-    went stale the moment a month passed without an admin CRUD. RAGEngine
-    recomputes it from `coding_start` on every retrieve instead.
-    """
     return {
         'id'  : 'stats_summary',
         'text': (
@@ -176,7 +154,6 @@ def _stats_chunk(total_projects: int, total_certs: int, coding_start: str) -> di
 
 
 def _projects_summary_chunk(rows: list[tuple]) -> dict:
-    """One chunk listing every project title, for the same reason as skills."""
     titles = '; '.join(str(r[1]) for r in rows)
     return {
         'id'  : 'projects_summary',
@@ -251,14 +228,12 @@ CERTS_SQL = """
 
 
 def _coding_start(cur) -> str:
-    """ISO date Adit-san started coding, from the stats table. '' when unset."""
     cur.execute("SELECT start_date FROM stats WHERE key = 'months_studying'")
     row = cur.fetchone()
     return row[0].isoformat() if row and row[0] else ''
 
 
 def _derived_chunks(cur) -> tuple[list[dict], list[tuple]]:
-    """(derived chunks, raw project rows) - the rows are reused by the caller."""
     cur.execute('SELECT COUNT(*) FROM projects')
     total_projects = int(cur.fetchone()[0])
     cur.execute('SELECT COUNT(*) FROM certificates')
@@ -274,11 +249,6 @@ def _derived_chunks(cur) -> tuple[list[dict], list[tuple]]:
 
 
 def refresh_derived_chunks() -> list[dict]:
-    """Chunks that summarise the whole DB, so they need a refresh after any CRUD.
-
-    Raises DBUnavailable so the caller can return a real error instead of
-    silently indexing nothing.
-    """
     with _cursor() as cur:
         derived, _ = _derived_chunks(cur)
     return derived
@@ -294,8 +264,6 @@ def load_dynamic_data() -> list[dict]:
 
 
 def load_all_chunks() -> tuple[list[dict], bool]:
-    """Returns (chunks, db_ok). db_ok=False means dynamic chunks are missing, so
-    the caller must not treat a short index as complete."""
     static = load_static_data()
     try:
         dynamic = load_dynamic_data()

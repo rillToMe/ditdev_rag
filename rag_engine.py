@@ -1,5 +1,3 @@
-"""Retrieval engine: embed, score, and format portfolio chunks for the LLM."""
-
 import hashlib
 import logging
 import os
@@ -10,23 +8,21 @@ from collections import Counter, OrderedDict
 
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
 
 from data_loader import DBUnavailable, load_all_chunks, months_since, refresh_derived_chunks
+from embeddings import CloudflareEmbeddingProvider, EmbeddingProvider
 
 log = logging.getLogger('ditdev_rag')
 
 COLLECTION_NAME = 'ditdev_portfolio'
 CHROMA_PATH     = os.path.join(os.path.dirname(__file__), 'chroma_store')
-EMBED_MODEL     = os.getenv('RAG_EMBED_MODEL', 'intfloat/multilingual-e5-small')
 
-# multilingual-e5 packs embeddings into a very narrow cone, and every chunk here is
-# about one person, so even nonsense lands close. Measured on this corpus with
-# `python test_retrieve.py`: 11 on-topic queries span 0.102-0.193, 3 off-topic ones
-# 0.234-0.249. 0.21 sits in that gap. The old 0.7 let literally everything through,
-# so `found` was always true - and 0.32 was still above every off-topic hit.
-# Re-measure after changing the model or adding chunk types; the margin is ~0.02,
-# so this is a tuning knob, not a constant.
+# Cosine distance cutoff, measured against a specific model - it is NOT portable
+# across models. Numbers below were measured on multilingual-e5-small with
+# `python test_retrieve.py`: 11 on-topic queries spanned 0.102-0.193, 3 off-topic
+# ones 0.234-0.249, so 0.21 split them with ~0.02 of margin.
+# bge-m3 has its own spread: re-run test_retrieve.py and re-tune before trusting
+# `found: false`. The old 0.7 let literally everything through.
 DISTANCE_THRESHOLD = float(os.getenv('RAG_DISTANCE_THRESHOLD', '0.21'))
 
 CACHE_SIZE = 128
@@ -83,11 +79,6 @@ _INTENT_MATCHERS = tuple(
 
 
 class LRUCache:
-    """Size- and TTL-bounded cache.
-
-    Locked because FastAPI runs sync endpoints in a threadpool: two concurrent
-    /retrieve calls hitting the same expired key used to race on `del`.
-    """
 
     def __init__(self, maxsize: int, ttl: int):
         self.cache   = OrderedDict()
@@ -115,7 +106,6 @@ class LRUCache:
                 self.cache.popitem(last=False)
 
     def invalidate(self):
-        """Drop everything; called whenever the index changes."""
         with self._lock:
             self.cache.clear()
 
@@ -125,9 +115,9 @@ class LRUCache:
 
 
 class RAGEngine:
-    def __init__(self):
-        log.info('Loading embedding model: %s', EMBED_MODEL)
-        self.embedder = SentenceTransformer(EMBED_MODEL, device='cpu', local_files_only=False)
+    def __init__(self, embedder: EmbeddingProvider | None = None):
+        self.embedder = embedder or CloudflareEmbeddingProvider.from_env()
+        log.info('Embedding provider: %s (%s)', type(self.embedder).__name__, self.embedder.model)
 
         log.info('Opening ChromaDB at %s', CHROMA_PATH)
         self.client     = chromadb.PersistentClient(
@@ -138,10 +128,12 @@ class RAGEngine:
 
         self.cache = LRUCache(CACHE_SIZE, CACHE_TTL)
         self.db_ok = True                      # last known Postgres state, for /health
-        self._embed_lock = threading.Lock()    # SentenceTransformer isn't documented thread-safe
         self._write_lock = threading.RLock()   # serialises index mutations and rebuilds
 
         self._reconcile()
+
+    def close(self) -> None:
+        self.embedder.close()
 
     def _open_collection(self):
         return self.client.get_or_create_collection(
@@ -149,13 +141,12 @@ class RAGEngine:
             metadata={'hnsw:space': 'cosine'},
         )
 
-    def _reconcile(self):
-        """Rebuild on startup when the index doesn't match the database.
+    def _indexed_dim(self) -> int | None:
+        got = self.collection.peek(limit=1).get('embeddings')
+        # Chroma hands back a numpy array here, so `or`/truthiness is not safe.
+        return len(got[0]) if got is not None and len(got) else None
 
-        The backend's index hooks are fire-and-forget, so a project can be missing
-        from the index for good if this service happened to be down during an
-        admin CRUD. Startup is the cheap place to notice - the corpus is ~30 chunks.
-        """
+    def _reconcile(self):
         indexed = self.collection.count()
         chunks, self.db_ok = load_all_chunks()
 
@@ -167,7 +158,15 @@ class RAGEngine:
                 self._write(chunks)
             return
 
-        if indexed != len(chunks):
+        live_dim    = len(self.embedder.embed('dimension probe'))
+        indexed_dim = self._indexed_dim() if indexed else None
+        if indexed_dim is not None and indexed_dim != live_dim:
+            log.warning(
+                'Embedding dimension changed (%d indexed vs %d from %s) - rebuilding',
+                indexed_dim, live_dim, self.embedder.model,
+            )
+            self.rebuild_index(chunks)
+        elif indexed != len(chunks):
             log.warning('Index drift: %d indexed vs %d expected - rebuilding', indexed, len(chunks))
             self.rebuild_index(chunks)
         else:
@@ -198,8 +197,6 @@ class RAGEngine:
 
     @staticmethod
     def _dynamic_top_k(normalized: str) -> int:
-        """Sized from the RAW query. The old code measured the expanded string,
-        which is always long enough to land in the 'complex' branch."""
         words = len(normalized.split())
         if words <= 4:
             return 3
@@ -224,12 +221,6 @@ class RAGEngine:
 
     @staticmethod
     def _freshen(doc: str, meta: dict) -> str:
-        """Recompute the coding duration on every request.
-
-        The month count used to be baked into the stats chunk text, so it went
-        stale as soon as a month passed with no admin CRUD - while that same text
-        told the LLM the number was authoritative.
-        """
         if meta.get('type') != 'stats':
             return doc
         start  = meta.get('coding_start', '')
@@ -265,8 +256,9 @@ class RAGEngine:
             log.warning('Retrieve on an empty collection')
             return ''
 
-        with self._embed_lock:
-            embedding = self.embedder.encode([f'query: {expanded}']).tolist()[0]
+        # No `query: ` prefix any more: that was e5's required instruction format.
+        # bge-m3 is prefix-free and prepending one just adds noise to the vector.
+        embedding = self.embedder.embed(expanded)
 
         results = self.collection.query(
             query_embeddings=[embedding],
@@ -315,11 +307,9 @@ class RAGEngine:
         texts = [c['text']             for c in chunks]
         metas = [c.get('metadata', {}) for c in chunks]
 
-        with self._embed_lock:
-            embeddings = self.embedder.encode(
-                [f'passage: {t}' for t in texts],
-                show_progress_bar=False,
-            ).tolist()
+        # One batched call, not one request per chunk. The `passage: ` prefix went
+        # with e5; bge-m3 embeds documents and queries the same way.
+        embeddings = self.embedder.embed_batch(texts)
 
         for i in range(0, len(ids), 100):
             self.collection.upsert(
@@ -331,8 +321,6 @@ class RAGEngine:
         log.info('Indexed %d chunks', len(ids))
 
     def upsert_chunk(self, chunk_id: str, text: str, metadata: dict | None = None) -> bool:
-        """Add or replace one chunk. /index/add and /index/update are the same
-        Chroma upsert, so they share one implementation."""
         try:
             with self._write_lock:
                 self._write([{'id': chunk_id, 'text': text, 'metadata': metadata or {}}])
@@ -354,11 +342,6 @@ class RAGEngine:
             return False
 
     def refresh_derived(self) -> list[str]:
-        """Re-embed the chunks that summarise the whole DB (stats, project list).
-
-        Raises DBUnavailable, so a failed refresh surfaces as an error instead of
-        leaving the LLM with stale counts it has been told are authoritative.
-        """
         chunks = refresh_derived_chunks()
         with self._write_lock:
             self._write(chunks)
@@ -397,5 +380,8 @@ class RAGEngine:
             'chunks' : len(metadatas),
             'by_type': dict(by_type),
             'db_ok'  : self.db_ok,
+            # Which model built this index. The top failure mode after the
+            # Cloudflare migration is querying a 384-dim index with 1024-dim vectors.
+            'embed_model': self.embedder.model,
             'cache'  : self.cache_stats(),
         }

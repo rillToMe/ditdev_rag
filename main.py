@@ -1,10 +1,3 @@
-"""FastAPI wrapper around RAGEngine.
-
-Binds to 127.0.0.1 by default: every caller (the Rust backend) is local, and the
-mutating /index/* routes write text that lands verbatim in a public chatbot's
-system prompt. Set RAG_HOST to expose it, and RAG_API_SECRET is then required.
-"""
-
 import logging
 import os
 import secrets
@@ -12,10 +5,12 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from data_loader import DBUnavailable
+from embeddings import EmbeddingError
 from rag_engine import RAGEngine
 
 load_dotenv()
@@ -39,13 +34,22 @@ rag: RAGEngine | None = None
 async def lifespan(_: FastAPI):
     global rag
     log.info('Starting up...')
+    # Embeddings come from Cloudflare Workers AI; a missing CLOUDFLARE_* var raises
+    # EmbeddingConfigError here rather than on the first user query.
     rag = RAGEngine()
     log.info('Ready on %s:%s', HOST, PORT)
     yield
+    rag.close()
     rag = None
 
 
 app = FastAPI(title='DitDev RAG Service', version='2.1.0', lifespan=lifespan)
+
+
+@app.exception_handler(EmbeddingError)
+async def embedding_error(_: Request, exc: EmbeddingError):
+    log.error('Embedding failed: %s', exc)
+    return JSONResponse(status_code=503, content={'detail': f'Embedding provider unavailable: {exc}'})
 
 
 def get_rag() -> RAGEngine:
@@ -55,8 +59,6 @@ def get_rag() -> RAGEngine:
 
 
 def require_secret(x_rag_secret: str = Header(default='')):
-    """Guards every mutating route. A no-op when RAG_API_SECRET is unset, which is
-    safe only because the service binds to localhost - startup enforces that."""
     if API_SECRET and not secrets.compare_digest(x_rag_secret, API_SECRET):
         raise HTTPException(status_code=401, detail='Invalid or missing X-RAG-Secret')
 
@@ -123,12 +125,6 @@ def index_delete(req: ChunkDeleteRequest):
 
 @app.post('/index/refresh-derived', dependencies=[Depends(require_secret)])
 def index_refresh_derived():
-    """Recompute the whole-DB summary chunks (stats + project list).
-
-    The backend calls this after any create/delete instead of formatting
-    stats_summary itself - that duplicate template had already drifted and was
-    dropping the anti-hallucination guard from the indexed text.
-    """
     try:
         refreshed = get_rag().refresh_derived()
     except DBUnavailable as e:

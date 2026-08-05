@@ -1,6 +1,6 @@
 fastapi==0.115.0
 uvicorn==0.30.6
-sentence-transformers==3.1.1
 chromadb==0.5.15
+httpx==0.28.1
 psycopg2-binary==2.9.9
 python-dotenv==1.0.1
