@@ -1,116 +1,174 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+"""FastAPI wrapper around RAGEngine.
+
+Binds to 127.0.0.1 by default: every caller (the Rust backend) is local, and the
+mutating /index/* routes write text that lands verbatim in a public chatbot's
+system prompt. Set RAG_HOST to expose it, and RAG_API_SECRET is then required.
+"""
+
+import logging
 import os
+import secrets
+from contextlib import asynccontextmanager
+
+import uvicorn
 from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field
+
+from data_loader import DBUnavailable
 from rag_engine import RAGEngine
 
 load_dotenv()
 
-app = FastAPI(title='DitDev RAG Service', version='2.0.0')
+logging.basicConfig(
+    level=os.getenv('RAG_LOG_LEVEL', 'INFO').upper(),
+    format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
+)
+log = logging.getLogger('ditdev_rag')
 
-rag: RAGEngine = None
+HOST           = os.getenv('RAG_HOST', '127.0.0.1')
+PORT           = int(os.getenv('RAG_PORT', '8765'))
+API_SECRET     = os.getenv('RAG_API_SECRET', '')
+REBUILD_SECRET = os.getenv('RAG_REBUILD_SECRET', '')
+LOCAL_HOSTS    = {'127.0.0.1', 'localhost', '::1'}
 
-@app.on_event('startup')
-async def startup():
+rag: RAGEngine | None = None
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     global rag
-    print('[RAG Service] Starting up...')
+    log.info('Starting up...')
     rag = RAGEngine()
-    print('[RAG Service] Ready!')
+    log.info('Ready on %s:%s', HOST, PORT)
+    yield
+    rag = None
+
+
+app = FastAPI(title='DitDev RAG Service', version='2.1.0', lifespan=lifespan)
+
 
 def get_rag() -> RAGEngine:
-    if not rag:
+    if rag is None:
         raise HTTPException(status_code=503, detail='RAG engine not ready')
     return rag
 
-#Request/Response models 
+
+def require_secret(x_rag_secret: str = Header(default='')):
+    """Guards every mutating route. A no-op when RAG_API_SECRET is unset, which is
+    safe only because the service binds to localhost - startup enforces that."""
+    if API_SECRET and not secrets.compare_digest(x_rag_secret, API_SECRET):
+        raise HTTPException(status_code=401, detail='Invalid or missing X-RAG-Secret')
+
+
+# Request/response models
 
 class RetrieveRequest(BaseModel):
-    query : str
-    top_k : int = 4
+    query: str = Field(min_length=1, max_length=2000)
+    # None lets the engine size top_k from the query. The old `= 4` default meant
+    # every caller silently pinned it and _dynamic_top_k() was dead code.
+    top_k: int | None = Field(default=None, ge=1, le=20)
+
 
 class RetrieveResponse(BaseModel):
     context: str
     found  : bool
 
-class IndexAddRequest(BaseModel):
-    chunk_id: str
-    text    : str
-    metadata: Optional[dict] = {}
 
-class IndexDeleteRequest(BaseModel):
-    chunk_id: str
+class ChunkUpsertRequest(BaseModel):
+    chunk_id: str = Field(min_length=1, max_length=200)
+    text    : str = Field(min_length=1, max_length=20_000)
+    metadata: dict | None = None
+
+
+class ChunkDeleteRequest(BaseModel):
+    chunk_id: str = Field(min_length=1, max_length=200)
+
 
 class RebuildRequest(BaseModel):
     secret: str
+
 
 # Endpoints
 
 @app.get('/health')
 def health():
-    r = get_rag()
-    return {'status': 'ok', 'chunks': r.collection.count()}
+    return get_rag().health()
 
 
 @app.post('/retrieve', response_model=RetrieveResponse)
 def retrieve(req: RetrieveRequest):
-    r = get_rag()
-    if not req.query.strip():
-        return RetrieveResponse(context='', found=False)
-    context = r.retrieve(req.query.strip(), top_k=req.top_k)
+    context = get_rag().retrieve(req.query, top_k=req.top_k)
     return RetrieveResponse(context=context, found=bool(context))
 
-#add chunk
-@app.post('/index/add')
-def index_add(req: IndexAddRequest):
-    r = get_rag()
-    ok = r.add_chunk(req.chunk_id, req.text, req.metadata or {})
-    if not ok:
-        raise HTTPException(status_code=500, detail='Failed to add chunk')
-    return {'status': 'added', 'chunk_id': req.chunk_id, 'total': r.collection.count()}
 
-#update chunk
-@app.post('/index/update')
-def index_update(req: IndexAddRequest):
+# /index/add and /index/update are the same upsert; both kept so the backend
+# hooks stay readable.
+@app.post('/index/add', dependencies=[Depends(require_secret)])
+@app.post('/index/update', dependencies=[Depends(require_secret)])
+def index_upsert(req: ChunkUpsertRequest):
     r = get_rag()
-    ok = r.update_chunk(req.chunk_id, req.text, req.metadata or {})
-    if not ok:
-        raise HTTPException(status_code=500, detail='Failed to update chunk')
-    return {'status': 'updated', 'chunk_id': req.chunk_id}
+    if not r.upsert_chunk(req.chunk_id, req.text, req.metadata):
+        raise HTTPException(status_code=500, detail='Failed to upsert chunk')
+    return {'status': 'upserted', 'chunk_id': req.chunk_id, 'total': r.collection.count()}
 
-#delete chunk
-@app.post('/index/delete')
-def index_delete(req: IndexDeleteRequest):
+
+@app.post('/index/delete', dependencies=[Depends(require_secret)])
+def index_delete(req: ChunkDeleteRequest):
     r = get_rag()
-    ok = r.delete_chunk(req.chunk_id)
-    if not ok:
+    if not r.delete_chunk(req.chunk_id):
         raise HTTPException(status_code=500, detail='Failed to delete chunk')
     return {'status': 'deleted', 'chunk_id': req.chunk_id, 'total': r.collection.count()}
 
-#rebuild chunk
-@app.post('/rebuild')
-def rebuild(req: RebuildRequest):
-    if req.secret != os.getenv('RAG_REBUILD_SECRET', 'changli_rebuild'):
-        raise HTTPException(status_code=401, detail='Invalid secret')
-    r = get_rag()
-    r.rebuild_index()
-    return {'status': 'rebuilt', 'chunks': r.collection.count()}
 
-# Cache stats
+@app.post('/index/refresh-derived', dependencies=[Depends(require_secret)])
+def index_refresh_derived():
+    """Recompute the whole-DB summary chunks (stats + project list).
+
+    The backend calls this after any create/delete instead of formatting
+    stats_summary itself - that duplicate template had already drifted and was
+    dropping the anti-hallucination guard from the indexed text.
+    """
+    try:
+        refreshed = get_rag().refresh_derived()
+    except DBUnavailable as e:
+        raise HTTPException(status_code=503, detail=f'Database unavailable: {e}') from e
+    return {'status': 'refreshed', 'chunk_ids': refreshed}
+
+
+@app.post('/rebuild', dependencies=[Depends(require_secret)])
+def rebuild(req: RebuildRequest):
+    # No hardcoded fallback: the old default ('changli_rebuild') was committed in
+    # env.example, so it was effectively public.
+    if not REBUILD_SECRET:
+        raise HTTPException(status_code=503, detail='RAG_REBUILD_SECRET is not set; rebuild disabled')
+    if not secrets.compare_digest(req.secret, REBUILD_SECRET):
+        raise HTTPException(status_code=401, detail='Invalid secret')
+    try:
+        total = get_rag().rebuild_index()
+    except DBUnavailable as e:
+        raise HTTPException(status_code=503, detail=f'Database unavailable: {e}') from e
+    return {'status': 'rebuilt', 'chunks': total}
+
+
 @app.get('/cache/stats')
 def cache_stats():
-    r = get_rag()
-    return r.cache_stats()
+    return get_rag().cache_stats()
 
-# Cache clear
-@app.post('/cache/clear')
+
+@app.post('/cache/clear', dependencies=[Depends(require_secret)])
 def cache_clear():
-    r = get_rag()
-    r.cache.invalidate()
+    get_rag().cache.invalidate()
     return {'status': 'cleared'}
 
 
 if __name__ == '__main__':
-    import uvicorn
-    port = int(os.getenv('RAG_PORT', 8765))
-    uvicorn.run('main:app', host='0.0.0.0', port=port, reload=False)
+    if HOST not in LOCAL_HOSTS and not API_SECRET:
+        raise SystemExit(
+            f'Refusing to bind {HOST} without RAG_API_SECRET: /index/* would let anyone '
+            f'inject text straight into the chatbot prompt. Set RAG_API_SECRET or keep '
+            f'RAG_HOST=127.0.0.1.'
+        )
+    # Keep this single-process: the index is built at startup and the query cache
+    # lives in memory, so extra workers mean N model copies and N caches.
+    uvicorn.run('main:app', host=HOST, port=PORT, reload=False, workers=1)
