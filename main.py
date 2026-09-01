@@ -3,6 +3,7 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 
+import sys
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -158,22 +159,20 @@ def cache_clear():
     return {'status': 'cleared'}
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if HOST not in LOCAL_HOSTS and not API_SECRET:
         raise SystemExit(
-            f'Refusing to bind {HOST} without RAG_API_SECRET: /index/* would let anyone '
-            f'inject text straight into the chatbot prompt. Set RAG_API_SECRET or keep '
-            f'RAG_HOST=127.0.0.1.'
+            f"Refusing to bind {HOST} without RAG_API_SECRET: /index/* would let anyone "
+            f"inject text straight into the chatbot prompt. Set RAG_API_SECRET or keep "
+            f"RAG_HOST=127.0.0.1."
         )
-    # Keep this single-process: the index is built at startup and the query cache
-    # lives in memory, so extra workers mean N model copies and N caches.
-    
+
     uvicorn.run(
-    "main:app",
-    host=HOST,
-    port=PORT,
-    reload=False,
-    workers=1,
-    loop="uvloop",
-    http="httptools",
+        "main:app",
+        host=HOST,
+        port=PORT,
+        reload=False,
+        workers=1,
+        loop="uvloop" if sys.platform != "win32" else "asyncio",
+        http="httptools",
     )

@@ -41,5 +41,3 @@ Thumbs.db
 htmlcov/
 .coverage
 test_model.py
-
-implementation_plan.md

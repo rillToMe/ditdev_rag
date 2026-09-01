@@ -1,6 +1,16 @@
 fastapi==0.115.0
 uvicorn==0.30.6
+# Both are selected explicitly in main.py (http="httptools", loop="uvloop" off
+# win32), so they are hard requirements, not uvicorn[standard] extras. Without
+# httptools uvicorn fails Config.load() at boot; uvloop only bites on Linux.
+httptools==0.8.0
+uvloop==0.21.0; sys_platform != 'win32'
+pydantic==2.13.5
 chromadb==0.5.15
+# Pinned to the 3.x signature chromadb 0.5.15 calls positionally
+# (posthog.capture(distinct_id, event, properties)). posthog 7.x made those
+# keyword-only, which spams "capture() takes 1 positional argument" on startup.
+posthog==3.7.5
 httpx==0.28.1
 psycopg2-binary==2.9.9
 python-dotenv==1.0.1

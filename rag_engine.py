@@ -18,12 +18,13 @@ COLLECTION_NAME = 'ditdev_portfolio'
 CHROMA_PATH     = os.path.join(os.path.dirname(__file__), 'chroma_store')
 
 # Cosine distance cutoff, measured against a specific model - it is NOT portable
-# across models. Numbers below were measured on multilingual-e5-small with
-# `python test_retrieve.py`: 11 on-topic queries spanned 0.102-0.193, 3 off-topic
-# ones 0.234-0.249, so 0.21 split them with ~0.02 of margin.
-# bge-m3 has its own spread: re-run test_retrieve.py and re-tune before trusting
-# `found: false`. The old 0.7 let literally everything through.
-DISTANCE_THRESHOLD = float(os.getenv('RAG_DISTANCE_THRESHOLD', '0.21'))
+# across models. Re-run `python test_retrieve.py` and re-tune after any embedding
+# model change, otherwise /retrieve silently answers `found: false` for everything.
+# Measured on bge-m3 (@cf/baai/bge-m3): 16 on-topic queries spanned 0.302-0.529,
+# 10 off-topic ones 0.567-0.679, so 0.55 splits them.
+# The previous 0.21 was tuned on multilingual-e5-small (on-topic 0.102-0.193) and
+# rejected every single bge-m3 hit.
+DISTANCE_THRESHOLD = float(os.getenv('RAG_DISTANCE_THRESHOLD', '0.55'))
 
 CACHE_SIZE = 128
 CACHE_TTL  = 300   # seconds; writes also invalidate explicitly
