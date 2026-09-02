@@ -154,12 +154,20 @@ def _stats_chunk(total_projects: int, total_certs: int, coding_start: str) -> di
 
 
 def _projects_summary_chunk(rows: list[tuple]) -> dict:
-    titles = '; '.join(str(r[1]) for r in rows)
+    # Per project: title + tech stack, not just the title. This chunk outranks the
+    # individual project chunks on any "list all projects" query, and top_k only
+    # admits 3-5 chunks total - so a titles-only summary left the model naming
+    # projects it had no details for, and it correctly reported them as unknown.
+    listed = '; '.join(
+        f'{title} (tech stack: {", ".join(tags)})' if tags else str(title)
+        for _, title, _, tags, _ in rows
+    )
     return {
         'id'  : 'projects_summary',
         'text': (
-            f"Complete project list of Adit-san - {len(rows)} projects in total: {titles}. "
-            f"Use this list when asked to list or count all projects."
+            f"Complete project list of Adit-san - {len(rows)} projects in total: {listed}. "
+            f"Use this list when asked to list or count all projects, or to name the "
+            f"technologies used in each one."
         ),
         'metadata': {'type': 'project', 'name': 'All projects summary'},
     }
@@ -171,12 +179,17 @@ def _project_chunk(row: tuple) -> dict:
     links_str = ''.join(
         f" {l['type']}: {l['url']}" for l in (links or []) if l.get('url')
     )
+    # "Tech stack:" only - the old "Tags/Tech stack:" made the model treat the
+    # field as ambiguous metadata and answer "tech stack not specified" while the
+    # values sat right there. An empty list is omitted rather than sent as an
+    # empty field, which reads as "unknown" to the model either way but no longer
+    # invites it to echo a blank label.
     return {
         'id'  : f'project_{pid}',
         'text': (
             f"Project by Adit-san: {title}. "
-            f"Description: {description}. "
-            f"Tags/Tech stack: {tags_str}."
+            f"Description: {description}."
+            f"{(' Tech stack: ' + tags_str + '.') if tags_str else ''}"
             f"{(' Links:' + links_str) if links_str else ''}"
         ),
         'metadata': {
